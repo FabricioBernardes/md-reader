@@ -1,0 +1,52 @@
+{
+  "name": "md-reader",
+  "displayName": "MD Reader",
+  "description": "Markdown preview with built-in text-to-speech powered by Piper TTS",
+  "version": "0.1.0",
+  "publisher": "fbernardes",
+  "engines": {
+    "vscode": "^1.98.0"
+  },
+  "categories": ["Other"],
+  "extensionDependencies": [
+    "sethmiller.piper-tts"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "md-reader.openPreview",
+        "title": "Open Markdown Reader",
+        "category": "MD Reader",
+        "icon": "$(open-preview)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "when": "resourceLangId == markdown",
+          "command": "md-reader.openPreview",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "md-reader.openPreview",
+          "when": "resourceLangId == markdown"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.98.0",
+    "@types/node": "20.x",
+    "typescript": "^5.8.3",
+    "@vscode/vsce": "^3.3.2"
+  }
+}
