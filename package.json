@@ -8,10 +8,7 @@
     "vscode": "^1.98.0"
   },
   "categories": ["Other"],
-  "extensionDependencies": [
-    "sethmiller.piper-tts"
-  ],
-  "activationEvents": [],
+"activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [

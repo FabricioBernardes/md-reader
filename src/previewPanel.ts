@@ -1,29 +1,5 @@
 import * as vscode from 'vscode';
 
-interface PiperTTSApi {
-	readText(text: string): Promise<void>;
-	stopPlayback(): void;
-	selectVoice(): Promise<void>;
-}
-
-let piperApi: PiperTTSApi | undefined;
-
-async function getPiperApi(): Promise<PiperTTSApi | undefined> {
-	if (piperApi) {
-		return piperApi;
-	}
-	const ext = vscode.extensions.getExtension('sethmiller.piper-tts');
-	if (!ext) {
-		vscode.window.showErrorMessage('Piper TTS extension is not installed.');
-		return undefined;
-	}
-	if (!ext.isActive) {
-		await ext.activate();
-	}
-	piperApi = ext.exports as PiperTTSApi;
-	return piperApi;
-}
-
 export class MarkdownPreviewPanel {
 	private static panels = new Map<string, MarkdownPreviewPanel>();
 	private readonly panel: vscode.WebviewPanel;
@@ -31,7 +7,7 @@ export class MarkdownPreviewPanel {
 	private readonly context: vscode.ExtensionContext;
 	private disposed = false;
 
-	static createOrShow(context: vscode.ExtensionContext, docUri: vscode.Uri) {
+	static async createOrShow(context: vscode.ExtensionContext, docUri: vscode.Uri) {
 		const key = docUri.toString();
 		const existing = MarkdownPreviewPanel.panels.get(key);
 		if (existing && !existing.disposed) {
@@ -51,6 +27,7 @@ export class MarkdownPreviewPanel {
 
 		const instance = new MarkdownPreviewPanel(context, panel, docUri);
 		MarkdownPreviewPanel.panels.set(key, instance);
+		await instance.render();
 	}
 
 	static updateIfVisible(docUri: vscode.Uri) {
@@ -70,35 +47,6 @@ export class MarkdownPreviewPanel {
 		this.docUri = docUri;
 
 		this.panel.onDidDispose(() => this.dispose());
-
-		this.panel.webview.onDidReceiveMessage(async (msg) => {
-			switch (msg.type) {
-				case 'tts-play': {
-					const api = await getPiperApi();
-					if (api && msg.text) {
-						try {
-							await api.readText(msg.text);
-							this.panel.webview.postMessage({ type: 'tts-ended' });
-						} catch {
-							this.panel.webview.postMessage({ type: 'tts-ended' });
-						}
-					}
-					break;
-				}
-				case 'tts-stop': {
-					const api = await getPiperApi();
-					api?.stopPlayback();
-					break;
-				}
-				case 'tts-select-voice': {
-					const api = await getPiperApi();
-					api?.selectVoice();
-					break;
-				}
-			}
-		});
-
-		this.render();
 	}
 
 	private async render() {
@@ -109,7 +57,6 @@ export class MarkdownPreviewPanel {
 	}
 
 	private async renderMarkdown(mdSource: string): Promise<string> {
-		// Use VS Code's built-in markdown rendering
 		const rendered = await vscode.commands.executeCommand<string>(
 			'markdown.api.render',
 			mdSource
@@ -187,6 +134,19 @@ body {
   border-color: var(--accent);
   color: var(--accent);
 }
+#sel-voice {
+  background: var(--toolbar-bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  max-width: 220px;
+}
+#sel-voice:focus {
+  outline: 1px solid var(--accent);
+}
 #tts-status {
   font-size: 12px;
   color: var(--accent);
@@ -245,7 +205,6 @@ body {
 #content img { max-width: 100%; }
 #content hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
 
-/* Selection highlight for TTS */
 ::selection {
   background: rgba(55, 148, 255, 0.3);
 }
@@ -256,7 +215,7 @@ body {
 <div id="tts-toolbar">
   <button id="btn-play" title="Read selected text or full document">&#9654; Play</button>
   <button id="btn-stop" title="Stop reading" disabled>&#9632; Stop</button>
-  <button id="btn-voice" title="Change TTS voice">&#127908; Voice</button>
+  <select id="sel-voice" title="Select voice"></select>
   <span id="tts-status"></span>
 </div>
 
@@ -266,15 +225,32 @@ ${bodyHtml}
 
 <script nonce="${nonce}">
 (function() {
-  const vscode = acquireVsCodeApi();
   const btnPlay = document.getElementById('btn-play');
   const btnStop = document.getElementById('btn-stop');
-  const btnVoice = document.getElementById('btn-voice');
+  const selVoice = document.getElementById('sel-voice');
   const status = document.getElementById('tts-status');
-  let playing = false;
+  const synth = window.speechSynthesis;
+  let voices = [];
+
+  function populateVoices() {
+    voices = synth.getVoices();
+    const current = selVoice.value;
+    selVoice.innerHTML = '';
+    voices.forEach(function(v, i) {
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = v.name + (v.default ? ' (default)' : '');
+      selVoice.appendChild(opt);
+    });
+    if (current) { selVoice.value = current; }
+  }
+
+  if (synth) {
+    synth.onvoiceschanged = populateVoices;
+    populateVoices();
+  }
 
   function setPlaying(val) {
-    playing = val;
     btnPlay.disabled = val;
     btnStop.disabled = !val;
     if (val) {
@@ -296,27 +272,22 @@ ${bodyHtml}
     return content ? content.innerText.trim() : '';
   }
 
-  btnPlay.addEventListener('click', () => {
+  btnPlay.addEventListener('click', function() {
     const text = getSelectedText() || getFullText();
-    if (!text) return;
+    if (!text || !synth) { return; }
+    synth.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    const idx = parseInt(selVoice.value, 10);
+    if (voices[idx]) { utt.voice = voices[idx]; }
+    utt.onend = function() { setPlaying(false); };
+    utt.onerror = function() { setPlaying(false); };
     setPlaying(true);
-    vscode.postMessage({ type: 'tts-play', text: text });
+    synth.speak(utt);
   });
 
-  btnStop.addEventListener('click', () => {
-    vscode.postMessage({ type: 'tts-stop' });
+  btnStop.addEventListener('click', function() {
+    if (synth) { synth.cancel(); }
     setPlaying(false);
-  });
-
-  btnVoice.addEventListener('click', () => {
-    vscode.postMessage({ type: 'tts-select-voice' });
-  });
-
-  window.addEventListener('message', (event) => {
-    const msg = event.data;
-    if (msg.type === 'tts-ended') {
-      setPlaying(false);
-    }
   });
 })();
 </script>
